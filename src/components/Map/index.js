@@ -9,9 +9,32 @@ mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
 import { useEventContext } from "@/utils/EventContext"
 import { useMapStore } from "@/components/Map/useMapStore"
 
+function removeLayer(map, layerName) {
+  if (map.getLayer(layerName)) {
+    try {
+      map.removeLayer(layerName)
+    } catch (err) {
+      console.log(`Couldn't remove ${layerName} layer`, err)
+    }
+  }
+}
+
+function removeSource(map, sourceName) {
+  if (map.getSource(sourceName)) {
+    try {
+      map.removeSource(sourceName)
+    } catch (err) {
+      console.log(`Couldn't remove ${sourceName} source`, err)
+    }
+  }
+}
+
 export default function MapboxMap() {
   const mapRef = useRef(null)
   const markerRef = useRef(null)
+  const isFirstStyleRun = useRef(true)
+  // map.isStyleLoaded() also waits for tiles, so track style readiness ourselves
+  const isStyleReady = useRef(false)
   const [isLoaded, setIsLoaded] = useState(false)
 
   const { eventId } = useEventContext()
@@ -19,7 +42,12 @@ export default function MapboxMap() {
   const selectedItem = useMapStore((state) => state.selectedItem)
   const showSatellite = useMapStore((state) => state.showSatellite)
   const showFloodLayers = useMapStore((state) => state.showFloodLayers)
-  const showNoFloodLayers = useMapStore((state) => state.showNoFloodLayers)
+
+  const showPermanentWater = useMapStore((state) => state.showPermanentWater)
+  const showCityLimits = useMapStore((state) => state.showCityLimits)
+  const showIrrigationDistricts = useMapStore(
+    (state) => state.showIrrigationDistricts
+  )
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -28,7 +56,7 @@ export default function MapboxMap() {
 
     const map = new mapboxgl.Map({
       container: "map",
-      style: "mapbox://styles/mapbox/light-v11",
+      style: showSatellite ? getSatelliteMapStyle() : getStreetMapStyle(),
       center: [-98.2, 26.3],
       zoom: 8,
       minZoom: 8,
@@ -36,6 +64,7 @@ export default function MapboxMap() {
     })
 
     map.on("style.load", () => {
+      isStyleReady.current = true
       setIsLoaded(true)
 
       map.addLayer({
@@ -73,6 +102,22 @@ export default function MapboxMap() {
     mapRef.current = map
   }, [])
 
+  // Must run before the layers effect below, so isStyleReady is already false
+  // when it runs after a satellite toggle
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined
+    if (!mapRef.current) return undefined
+    // The map is created with the right style, so skip the initial run
+    if (isFirstStyleRun.current) {
+      isFirstStyleRun.current = false
+      return undefined
+    }
+    const style = showSatellite ? getSatelliteMapStyle() : getStreetMapStyle()
+    // diff: false avoids the "style is not done loading" warning on fast toggles
+    isStyleReady.current = false
+    mapRef.current.setStyle(style, { diff: false })
+  }, [showSatellite])
+
   useEffect(() => {
     if (typeof window === "undefined") return undefined
     if (!mapRef.current) return undefined
@@ -80,185 +125,184 @@ export default function MapboxMap() {
     if (!eventId) return undefined
 
     const map = mapRef.current
+    let cancelled = false
 
-    function updateLayers(showFloodLayers = true, showNoFloodLayers = true) {
-      const layers = map.getStyle().layers
-      const labelLayerId = layers.find(
-        (layer) => layer.type === "symbol" && layer.layout["text-field"]
-      ).id
+    function updateLayers() {
+      // const layers = map.getStyle().layers
+      // const labelLayerId = layers.find(
+      //   (layer) => layer.type === "symbol" && layer.layout["text-field"]
+      // ).id
 
-      const allLayerIds = layers.map((d) => d.id)
+      // const allLayerIds = layers.map((d) => d.id)
 
-      if (allLayerIds.includes("perm-water-fill")) {
-        try {
-          map.removeLayer("perm-water-fill")
-        } catch (err) {
-          console.log("Couldn't remove perm-water layer", err)
-        }
-      }
+      removeLayer(map, "perm-water-fill")
+      removeSource(map, "perm-water")
 
-      if (allLayerIds.includes("flood-fill")) {
-        try {
-          map.removeLayer("flood-fill")
-        } catch (err) {
-          console.log("Couldn't remove flood-fill layer", err)
-        }
-      }
+      // removeLayer(map, "noflood-fill")
+      // removeSource(map, "noflood")
 
-      if (allLayerIds.includes("noflood-fill")) {
-        try {
-          map.removeLayer("noflood-fill")
-        } catch (err) {
-          console.log("Couldn't remove noflood-fill layer", err)
-        }
-      }
-
-      if (map.getSource("perm-water")) {
-        try {
-          map.removeSource("perm-water")
-        } catch (err) {
-          console.log("Couldn't remove perm-water source", err)
-        }
-      }
-
-      if (map.getSource("flood")) {
-        try {
-          map.removeSource("flood")
-        } catch (err) {
-          console.log("Couldn't remove flood source", err)
-        }
-      }
-
-      if (map.getSource("noflood")) {
-        try {
-          map.removeSource("noflood")
-        } catch (err) {
-          console.log("Couldn't remove noflood source", err)
-        }
-      }
-
-      map.addSource("perm-water", {
-        type: "vector",
-        tiles: [`${window.location.origin}/water/{z}/{x}/{y}.pbf`],
-        minzoom: 0,
-        maxzoom: 12,
-      })
-
-      map.addLayer(
-        {
-          id: "perm-water-fill",
-          type: "fill",
-          source: "perm-water",
-          "source-layer": "waterlayer",
-          paint: {
-            "fill-color": "#002266",
-            "fill-opacity": 0.8,
+      if (showPermanentWater) {
+        map.addSource("perm-water", {
+          type: "vector",
+          tiles: [`${window.location.origin}/water/{z}/{x}/{y}.pbf`],
+          minzoom: 0,
+          maxzoom: 12,
+        })
+        map.addLayer(
+          {
+            id: "perm-water-fill",
+            type: "fill",
+            source: "perm-water",
+            "source-layer": "waterlayer",
+            paint: {
+              "fill-color": "#002266",
+              "fill-opacity": 0.8,
+            },
           },
-        },
-        "water"
-      )
+          "water"
+        )
+      }
 
-      if (!showFloodLayers) return
+      removeLayer(map, "flood-fill")
+      removeSource(map, "flood")
 
-      map.addSource("flood", {
-        type: "vector",
-        tiles: [
-          `${window.location.origin}/tiles/event-${eventId}/flood/{z}/{x}/{y}.pbf`,
-        ],
-        minzoom: 0,
-        maxzoom: 12,
-      })
-
-      if (showNoFloodLayers) {
-        map.addSource("noflood", {
+      if (showFloodLayers) {
+        map.addSource("flood", {
           type: "vector",
           tiles: [
-            `${window.location.origin}/tiles/event-${eventId}/noflood/{z}/{x}/{y}.pbf`,
+            `${window.location.origin}/tiles/event-${eventId}/flood/{z}/{x}/{y}.pbf`,
           ],
           minzoom: 0,
           maxzoom: 12,
         })
-
         map.addLayer(
           {
-            id: "noflood-fill",
-            source: "noflood",
-            "source-layer": `mergedgeonoflood`,
+            id: "flood-fill",
             type: "fill",
+            source: "flood",
+            "source-layer": "floodlayer",
             paint: {
-              "fill-color": "#B2F2BB",
+              "fill-color": "#0066FF",
               "fill-opacity": 0.7,
             },
           },
-          labelLayerId
-          // "water"
+          "water"
         )
       }
 
-      fetch(`/data/rgv_cities-simplified.json`)
-        .then((res) => res.json())
-        .then((cities) => {
-          const citiesFill = mapRef.current.getLayer("cities-fill")
-          if (citiesFill) mapRef.current.removeLayer(citiesFill.id)
+      removeLayer(mapRef.current, "cities-fill")
+      removeLayer(mapRef.current, "cities-outline")
+      removeSource(mapRef.current, "cities")
 
-          const citiesOutline = mapRef.current.getLayer("cities-outline")
-          if (citiesOutline) mapRef.current.removeLayer(citiesOutline.id)
+      if (showCityLimits) {
+        fetch(`/data/rgv_cities-simplified.json`)
+          .then((res) => res.json())
+          .then((cities) => {
+            // A newer run or a pending style.load will add the layers instead
+            if (cancelled || !isStyleReady.current) return
+            removeLayer(mapRef.current, "cities-fill")
+            removeLayer(mapRef.current, "cities-outline")
+            removeSource(mapRef.current, "cities")
 
-          mapRef.current.addSource("cities", {
-            "type": "geojson",
-            "data": cities,
+            mapRef.current.addSource("cities", {
+              "type": "geojson",
+              "data": cities,
+            })
+            mapRef.current.addLayer(
+              {
+                "id": "cities-fill",
+                "type": "fill",
+                "source": "cities",
+                "layout": {},
+                "paint": {
+                  "fill-color": "#FFF",
+                  "fill-opacity": 0.15,
+                },
+              },
+              "water"
+            )
+            mapRef.current.addLayer(
+              {
+                "id": "cities-outline",
+                "type": "line",
+                "source": "cities",
+                "layout": {},
+                "paint": {
+                  "line-color": "#FFF",
+                  "line-width": 1,
+                },
+              },
+              "water"
+            )
           })
+      }
 
-          mapRef.current.addLayer(
-            {
-              "id": "cities-fill",
-              "type": "fill",
-              "source": "cities",
-              "layout": {},
-              "paint": {
-                "fill-color": "#FFF",
-                "fill-opacity": 0.15,
+      removeLayer(mapRef.current, "irrigation-districts-fill")
+      removeLayer(mapRef.current, "irrigation-districts-outline")
+      removeSource(mapRef.current, "irrigation-districts")
+
+      if (showIrrigationDistricts) {
+        fetch(`/data/rgv_irrigation_districts-fixed.json`)
+          .then((res) => res.json())
+          .then((irrigationDistricts) => {
+            // A newer run or a pending style.load will add the layers instead
+            if (cancelled || !isStyleReady.current) return
+            removeLayer(mapRef.current, "irrigation-districts-fill")
+            removeLayer(mapRef.current, "irrigation-districts-outline")
+            removeSource(mapRef.current, "irrigation-districts")
+
+            mapRef.current.addSource("irrigation-districts", {
+              "type": "geojson",
+              "data": irrigationDistricts,
+            })
+            mapRef.current.addLayer(
+              {
+                "id": "irrigation-districts-fill",
+                "type": "fill",
+                "source": "irrigation-districts",
+                "layout": {},
+                "paint": {
+                  "fill-color": "#99F5FF",
+                  "fill-opacity": 0.15,
+                },
               },
-            },
-            "water"
-          )
-
-          mapRef.current.addLayer(
-            {
-              "id": "cities-outline",
-              "type": "line",
-              "source": "cities",
-              "layout": {},
-              "paint": {
-                "line-color": "#FFF",
-                "line-width": 1,
+              "water"
+            )
+            mapRef.current.addLayer(
+              {
+                "id": "irrigation-districts-outline",
+                "type": "line",
+                "source": "irrigation-districts",
+                "layout": {},
+                "paint": {
+                  "line-color": "#99F5FF",
+                  "line-width": 1,
+                },
               },
-            },
-            "water"
-          )
-        })
-
-      map.addLayer(
-        {
-          id: "flood-fill",
-          type: "fill",
-          source: "flood",
-          "source-layer": "floodlayer",
-          paint: {
-            "fill-color": "#0066FF",
-            "fill-opacity": 0.7,
-          },
-        },
-        "water"
-      )
+              "water"
+            )
+          })
+      }
     }
 
-    map.on("style.load", () => {
-      updateLayers(showFloodLayers, showNoFloodLayers)
-    })
+    const onStyleLoad = () => updateLayers()
 
-    updateLayers(showFloodLayers, showNoFloodLayers)
-  }, [eventId, isLoaded, showSatellite, showFloodLayers, showNoFloodLayers])
+    map.on("style.load", onStyleLoad)
+    if (isStyleReady.current) updateLayers()
+
+    return () => {
+      cancelled = true
+      map.off("style.load", onStyleLoad)
+    }
+  }, [
+    eventId,
+    isLoaded,
+    showSatellite,
+    showFloodLayers,
+    showCityLimits,
+    showPermanentWater,
+    showIrrigationDistricts,
+  ])
 
   useEffect(() => {
     if (!mapRef.current) return undefined
@@ -300,20 +344,16 @@ export default function MapboxMap() {
     fetch(`/data/colonias/${selectedItem.id}.json`)
       .then((res) => res.json())
       .then((colonia) => {
-        const coloniaFill = mapRef.current.getLayer("colonia-fill")
-        if (coloniaFill) mapRef.current.removeLayer(coloniaFill.id)
-
-        const coloniaOutline = mapRef.current.getLayer("colonia-outline")
-        if (coloniaOutline) mapRef.current.removeLayer(coloniaOutline.id)
-
-        const coloniaSource = mapRef.current.getSource("colonia")
-        if (coloniaSource) mapRef.current.removeSource(coloniaSource.id)
+        removeLayer(mapRef.current, "colonia-fill")
+        removeLayer(mapRef.current, "colonia-outline")
+        removeSource(mapRef.current, "colonia")
 
         const labelLayerId = mapRef.current
           .getStyle()
           .layers.find(
             (layer) => layer.type === "symbol" && layer.layout["text-field"]
           ).id
+
         mapRef.current.addSource("colonia", {
           "type": "geojson",
           "data": {
@@ -352,16 +392,6 @@ export default function MapboxMap() {
         )
       })
   }, [JSON.stringify(selectedItem)])
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined
-    if (!mapRef.current) return undefined
-    if (showSatellite) {
-      mapRef.current.setStyle(getSatelliteMapStyle())
-    } else {
-      mapRef.current.setStyle(getStreetMapStyle())
-    }
-  }, [showSatellite])
 
   const handleZoomIn = () => {
     const currentZoom = mapRef.current.getZoom()

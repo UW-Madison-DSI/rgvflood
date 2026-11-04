@@ -32,4 +32,16 @@ export const useMapStore = create((set) => ({
       }
     }),
   showPermanentWater: true,
+  togglePermanentWater: () =>
+    set((state) => ({ showPermanentWater: !state.showPermanentWater })),
+
+  showCityLimits: true,
+  toggleCityLimits: () =>
+    set((state) => ({ showCityLimits: !state.showCityLimits })),
+
+  showIrrigationDistricts: false,
+  toggleIrrigationDistricts: () =>
+    set((state) => ({
+      showIrrigationDistricts: !state.showIrrigationDistricts,
+    })),
 }))
