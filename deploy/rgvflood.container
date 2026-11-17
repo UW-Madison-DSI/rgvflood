@@ -1,0 +1,21 @@
+# Podman Quadlet unit. Install on the server as
+# /etc/containers/systemd/rgvflood.container, then run:
+#   sudo systemctl daemon-reload
+#   sudo systemctl start rgvflood
+#   sudo systemctl enable --now podman-auto-update.timer
+
+[Unit]
+Description=FLUJOS RGV flood map
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/uw-madison-dsi/rgvflood:latest
+PublishPort=80:80
+AutoUpdate=registry
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
