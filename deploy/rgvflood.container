@@ -11,7 +11,9 @@ After=network-online.target
 
 [Container]
 Image=ghcr.io/uw-madison-dsi/rgvflood:latest
-PublishPort=80:80
+# Listens on localhost only. The host nginx (deploy/host-nginx.conf)
+# terminates HTTPS and proxies to this port.
+PublishPort=127.0.0.1:8080:80
 AutoUpdate=registry
 
 [Service]
